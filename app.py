@@ -1,35 +1,42 @@
 import flask
 import numpy as np
+import csv
+import json
+import os
 
 app = flask.Flask(__name__)
 
-@app.route("/",methods=["POST"])
+@app.route("/", methods=["POST"])
 def api():
     data = flask.request.get_json()
 
-    # 10 by 3 array containing 10 xyz data points (for acceleration and gyro)
+    # 10x3 arrays
     gyro = data.get("gyro")
-    acc = data.get("acc") 
+    acc = data.get("acc")
 
-    # Time data point was taken (seconds since 1970)
-    timestamp = data.get("time") 
+    # Unix timestamp (seconds since 1970)
+    timestamp = data.get("time")
 
-    # Checking validity of data
-    valid = np.array(gyro).shape == (10,3) and np.array(acc).shape == (10,3) and timestamp.isdigit()
+    # Validate
+    valid = (
+        np.array(gyro).shape == (10, 3)
+        and np.array(acc).shape == (10, 3)
+        and str(timestamp).isdigit()
+    )
 
-    # If all data is valid
     if valid:
+        file_exists = os.path.exists("train.csv")
 
-        # Opening file, appending new line to csv, closing file
-        with open("train.csv","a") as f:
-            f.write(f"\n{acc},{gyro},{timestamp}")
-            f.close()
+        # Append JSON-serialized arrays + timestamp
+        with open("train.csv", "a", newline="") as f:
+            writer = csv.writer(f)
+            if not file_exists:
+                writer.writerow(["acc_json", "gyro_json", "timestamp"])
+            writer.writerow([json.dumps(acc), json.dumps(gyro), str(timestamp)])
 
-        return flask.jsonify({"status":"success"})
-    
-    return flask.jsonify({"status":"failure","error":"data invalid"})
+        return flask.jsonify({"status": "success"}), 200
+
+    return flask.jsonify({"status": "failure", "error": "data invalid"}), 400
 
 if __name__ == "__main__":
     app.run(debug=True)
-
-    
