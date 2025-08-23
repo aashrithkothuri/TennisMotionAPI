@@ -24,3 +24,9 @@ def api():
         with open("train.csv","a") as f:
             f.write(f"\n{acc},{gyro},{timestamp}")
             f.close()
+
+        return flask.jsonify({"status":"success"})
+    
+    return flask.jsonify({"status":"failure","error":"data invalid"})
+
+    
