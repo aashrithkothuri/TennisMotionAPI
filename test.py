@@ -1,53 +1,93 @@
-# test_api.py
-import requests
-import numpy as np
-import time
+# test.py  
+# (completely AI generated)
+# "pytest test.py" to run tests (optionally -vv and/or -rA for a summary and explanation)
+
+import csv
 import json
-from typing import Tuple
+import sys
+import importlib
+from pathlib import Path
+import pytest
 
-URL = "http://127.0.0.1:5000/"
+def make_10x3(start=0):
+    # [[0,1,2], [3,4,5], ...] -> 10 rows
+    return [[i, i+1, i+2] for i in range(start, start + 30, 3)]
 
-def gen_arrays(shape: Tuple[int, int] = (10, 3)):
-    return np.random.randint(-500, 500, size=shape).tolist()
+def read_csv(path):
+    with open(path, newline="") as f:
+        return list(csv.reader(f))
 
-def valid_payload():
-    return {
-        "gyro": gen_arrays(),
-        "acc": gen_arrays(),
-        "time": str(int(time.time()))  # digits-only string
-    }
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    """
+    Inline fixture so you only need this one test file.
+    Assumes your Flask code lives in app.py and exposes `app`.
+    """
+    # Write CSVs into a temp dir so tests don't touch real files
+    monkeypatch.chdir(tmp_path)
 
-def bad_shape_payload():
-    return {
-        "gyro": gen_arrays((9, 3)),   # wrong shape
-        "acc": gen_arrays(),
-        "time": str(int(time.time()))
-    }
+    # Fresh import of the Flask app module
+    if "app" in sys.modules:
+        del sys.modules["app"]
+    app_module = importlib.import_module("app")
+    app_module.app.config["TESTING"] = True
 
-def bad_time_payload():
-    return {
-        "gyro": gen_arrays(),
-        "acc": gen_arrays(),
-        "time": "not_digits"          # invalid timestamp
-    }
+    with app_module.app.test_client() as c:
+        yield c
 
-def send(payload, label=""):
-    print(f"\n=== Sending {label or 'request'} ===")
-    print(json.dumps(payload)[:200] + ("..." if len(json.dumps(payload)) > 200 else ""))
-    try:
-        r = requests.post(URL, json=payload, timeout=5)
-        print("Status:", r.status_code)
-        # Print text to handle any type of response
-        print("Response:", r.text.strip() or "<empty>")
-    except requests.exceptions.RequestException as e:
-        print("Error:", e)
+def test_sensor_payload_writes_csv_and_returns_200(client):
+    acc = make_10x3(0)
+    gyro = make_10x3(100)
+    ts = 1699999999.5  # float timestamp is allowed by your code
 
-if __name__ == "__main__":
-    # 1) Valid request
-    send(valid_payload(), "valid payload")
+    r = client.post("/", json={"acc": acc, "gyro": gyro, "time": ts})
+    assert r.status_code == 200
+    assert r.get_json()["status"] == "success"
 
-    # 2) Invalid: wrong array shape
-    send(bad_shape_payload(), "invalid shape")
+    p = Path("motionsensors.csv")
+    assert p.exists()
+    rows = read_csv(p)
+    assert rows[0] == ["acc_json", "gyro_json", "timestamp"]  # header
+    assert rows[1][0] == json.dumps(acc)
+    assert rows[1][1] == json.dumps(gyro)
+    assert rows[1][2] == str(ts)
 
-    # 3) Invalid: bad timestamp
-    send(bad_time_payload(), "invalid timestamp")
+def test_speed_payload_writes_csv_and_returns_200(client):
+    speed = 35      # ints only pass your current str(...).isdigit() check
+    ts = 1700000000
+
+    r = client.post("/", json={"speed": speed, "time": ts})
+    assert r.status_code == 200
+    assert r.get_json()["status"] == "success"
+
+    p = Path("speedsensor.csv")
+    assert p.exists()
+    rows = read_csv(p)
+    assert rows[0] == ["speed", "timestamp"]  # header
+    # your code uses json.dumps(speed) -> "35"
+    assert rows[1] == [json.dumps(speed), str(ts)]
+
+def test_both_payloads_present_prefers_sensor_branch(client):
+    acc = make_10x3(0)
+    gyro = make_10x3(100)
+    ts = 1700000001
+    speed = 42
+
+    r = client.post("/", json={"acc": acc, "gyro": gyro, "time": ts, "speed": speed})
+    assert r.status_code == 200
+    assert Path("motionsensors.csv").exists()
+    # speed file should not be created because of the `elif`
+    assert not Path("speedsensor.csv").exists()
+
+def test_invalid_payload_returns_400(client):
+    r = client.post("/", json={})
+    assert r.status_code == 400
+    body = r.get_json()
+    assert body["status"] == "failure"
+    assert "invalid" in body["error"]
+
+def test_speed_float_is_rejected_by_isdigit(client):
+    # Documents current behavior: floats don't pass str(...).isdigit()
+    r = client.post("/", json={"speed": 12.34, "time": 1700000002})
+    assert r.status_code == 400
+    assert r.get_json()["status"] == "failure"
